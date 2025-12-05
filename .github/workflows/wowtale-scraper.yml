@@ -1,0 +1,58 @@
+name: Wowtale Scraper
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"   # 3시간마다 실행 (UTC 기준)
+  workflow_dispatch:          # 필요할 때 수동 실행도 가능
+
+permissions:
+  contents: write             # GITHUB_TOKEN이 push까지 할 수 있게
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install requests beautifulsoup4 openai
+
+      - name: Run wowtale scraper
+        run: |
+          python wowtale_auto.py
+
+      - name: Run GPT summarizer
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python wowale_GPT_auto.py
+
+      - name: Sync deals to Notion
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          python sync_wowtale_to_notion.py
+
+      - name: Commit and push CSV if changed
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ `git status --porcelain` ]]; then
+            echo "Changes detected. Committing..."
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add wowtale_latest.csv wowtale_deals.csv
+            git commit -m "Update wowtale CSVs" || echo "Nothing to commit"
+            git push || echo "Nothing to push"
+          else
+            echo "No changes to commit."
+          fi
