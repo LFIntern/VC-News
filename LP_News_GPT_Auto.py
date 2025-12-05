@@ -21,7 +21,7 @@ SYSTEM_PROMPT = """
 - LP(출자 기관) 목록
 - VC/PE 운용사(GP) 목록
 - 펀드 이름
-- 펀드 규모(텍스트/숫자/단위/통화)
+- 펀드 규모(텍스트/숫자/단위)
 - 주요 투자 섹터/스테이지
 - 기사 핵심 요약
 - VC 리서치 관점에서 한 줄 코멘트
@@ -42,19 +42,19 @@ USER_PROMPT_TEMPLATE = """
 
 스키마:
 {{
-  "lp_institutions": ["string | LP 이름 리스트, 예: '성장금융', '산업은행', '모태펀드' 등"],
-  "vc_firms": ["string | VC/PE 운용사(GP) 이름 리스트"],
-  "fund_name": "string | 펀드명, 없으면 null",
-  "fund_size": {{
-    "raw": "string | 기사에 나온 펀드 규모 표현 (예: '약 1,000억 원')",
-    "value": 0,
-    "unit": "string | '억원', '조원', 'billion', 'million' 등, 없으면 null",
-    "currency": "string | 'KRW', 'USD', 'JPY' 등, 알 수 없으면 null"
-  }},
-  "fund_sector": ["string | 바이오, 헬스케어, AI, 소재/부품, 친환경/에너지 등 섹터 리스트"],
-  "fund_stage": ["string | 초기, 시리즈A/B, 그로스, Pre-IPO 등 스테이지 리스트"],
-  "summary": "string | 기사 내용 핵심을 2~3문장으로 요약",
-  "analysis_comment": "string | VC/PE 리서치 관점에서 이 뉴스의 의미를 한두 문장으로 정리"
+  "LP": ["string | 출자자(LP) 이름 리스트"],
+  "운용사": ["string | VC/PE 운용사(GP) 이름 리스트"],
+  "펀드명": "string | 펀드명, 없으면 null",
+  "펀드규모_텍스트": "string | 기사에 나온 펀드 규모 표현 (예: '약 1,000억 원')",
+  "펀드규모_숫자": 0,
+  "펀드규모_단위": "string | '억', '조', 'billion', 'million' 등, 없으면 null",
+  "펀드유형": ["string | 벤처, 그로스, 세컨더리, 바이아웃, 프로젝트 등"],
+  "투자섹터": ["string | AI, 헬스케어, 소재/부품, 콘텐츠, 친환경/에너지 등"],
+  "투자단계": ["string | 초기, 시리즈A/B, 그로스, Pre-IPO 등"],
+  "투자지역": ["string | 국내, 글로벌, 미국, 유럽, 아시아 등"],
+  "조성상태": "string | 신규결성, 1차 클로징, 멀티클로징, 모집중 등",
+  "요약": "string | 기사 내용 핵심을 2~3문장으로 요약",
+  "코멘트": "string | VC/PE 리서치 관점에서 이 뉴스의 의미를 한두 문장으로 정리"
 }}
 """
 
@@ -80,24 +80,59 @@ def load_summarized_urls() -> set:
 
 
 def extract_article_text(url: str) -> (str, str):
-    """
-    기사 제목 + 본문 텍스트 추출.
-    더벨 구조에 맞게 selector는 필요에 따라 조정 가능.
+    """기사 제목 + 본문 텍스트 추출.
+
+    - thebell: div#article-view-content-div, div.article 등
+    - newstopkorea: article.atlview-grid-body (기사 본문 영역)
     """
     res = requests.get(url, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
     res.raise_for_status()
     soup = BeautifulSoup(res.text, "html.parser")
 
-    # 제목 후보
-    title_tag = soup.select_one("h1, h2, div.title, div#article-title")
+    # 제목 후보 (공통)
+    # - thebell의 경우 상단에 '전체기사' 같은 헤더가 먼저 나오고,
+    #   실제 기사 제목은 다른 태그(h3/h4 또는 별도 div)에 있는 경우가 있어
+    #   조금 더 폭넓게 잡고, 이후에 <meta>, <title>로도 보정한다.
+    title_tag = soup.select_one(
+        "h1, h2, h3, h4, div.title, div#article-title, div#articleTitle, div#article_title"
+    )
     title = (title_tag.get_text() or "").strip() if title_tag else ""
 
-    # 본문 후보
+    # thebell 등에서 헤더 텍스트('전체기사', '뉴스홈')만 잡히거나
+    # 아무것도 못 잡은 경우에 대한 보정
+    if not title or title in ("전체기사", "뉴스홈"):
+        # 1순위: og:title 메타 태그
+        og_meta = soup.find("meta", attrs={"property": "og:title"}) or soup.find(
+            "meta", attrs={"name": "title"}
+        )
+        if og_meta and og_meta.get("content"):
+            title = og_meta["content"].strip()
+
+    # 그래도 실패하면 <title> 태그에서 사이트명 이전까지만 사용
+    if (not title) and soup.title:
+        raw_title = soup.title.get_text(strip=True)
+        # 예: "[thebell desk]직원들이 회사를 샀다 - thebell"
+        if " - " in raw_title:
+            title = raw_title.split(" - ", 1)[0].strip()
+        else:
+            title = raw_title
+
+    # 본문候補 기본값 (thebell 등)
     candidates = [
         "div#article-view-content-div",
         "div.article",
         "div#content",
     ]
+
+    # newstopkorea 도메인의 경우 기사 본문 article.atlview-grid-body를 우선 시도
+    if "newstopkorea.com" in url:
+        candidates = [
+            "article.atlview-grid-body",
+            "div#article-view-content-div",
+            "div.article",
+            "div#content",
+        ]
+
     texts: List[str] = []
     for sel in candidates:
         parts = soup.select(sel + " p") or soup.select(sel)
@@ -135,21 +170,19 @@ def call_openai(title: str, body: str) -> Dict[str, Any]:
 
 def append_summaries(rows: List[dict]):
     fieldnames = [
-        "deal_number",
-        "url",
-        "article_title",
-        "lp_institutions",
-        "vc_firms",
-        "fund_name",
-        "fund_size_raw",
-        "fund_size_value",
-        "fund_size_unit",
-        "fund_size_currency",
-        "fund_sector",
-        "fund_stage",
-        "summary",
-        "analysis_comment",
+        "Deal ID",
+        "기사 제목",
+        "LP",
+        "운용사",
+        "펀드명",
+        "펀드규모_텍스트",
+        "펀드유형",
+        "투자섹터",
+        "조성상태",
+        "요약",
+        "코멘트",
         "summarized_at",
+        "url",
     ]
     file_exists = os.path.exists(SUMMARIES_CSV)
     with open(SUMMARIES_CSV, "a", newline="", encoding="utf-8-sig") as f:
@@ -182,24 +215,20 @@ if __name__ == "__main__":
             title, body = extract_article_text(url)
             data = call_openai(title=title, body=body)
 
-            fund_size = data.get("fund_size") or {}
-
             new_summary_rows.append(
                 {
-                    "deal_number": deal_number,
+                    "Deal ID": deal_number,
                     "url": url,
-                    "article_title": title,
-                    "lp_institutions": ", ".join(data.get("lp_institutions") or []),
-                    "vc_firms": ", ".join(data.get("vc_firms") or []),
-                    "fund_name": data.get("fund_name"),
-                    "fund_size_raw": fund_size.get("raw"),
-                    "fund_size_value": fund_size.get("value"),
-                    "fund_size_unit": fund_size.get("unit"),
-                    "fund_size_currency": fund_size.get("currency"),
-                    "fund_sector": ", ".join(data.get("fund_sector") or []),
-                    "fund_stage": ", ".join(data.get("fund_stage") or []),
-                    "summary": data.get("summary"),
-                    "analysis_comment": data.get("analysis_comment"),
+                    "기사 제목": title,
+                    "LP": ", ".join(data.get("LP") or []),
+                    "운용사": ", ".join(data.get("운용사") or []),
+                    "펀드명": data.get("펀드명"),
+                    "펀드규모_텍스트": data.get("펀드규모_텍스트"),
+                    "펀드유형": ", ".join(data.get("펀드유형") or []),
+                    "투자섹터": ", ".join(data.get("투자섹터") or []),
+                    "조성상태": data.get("조성상태"),
+                    "요약": data.get("요약"),
+                    "코멘트": data.get("코멘트"),
                     "summarized_at": datetime.utcnow().isoformat(),
                 }
             )

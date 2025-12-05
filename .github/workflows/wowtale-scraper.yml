@@ -52,6 +52,13 @@ jobs:
         run: |
           python LP_News_GPT_Auto.py
 
+      - name: Sync LP News to Notion
+        env:
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+        run: |
+          python sync_lp_news_to_notion.py
+
       - name: Commit and push CSV if changed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

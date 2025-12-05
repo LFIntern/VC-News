@@ -7,8 +7,59 @@ from typing import List, Set
 
 BASE_URL = "https://www.thebell.co.kr/free/content/article.asp"
 LINKS_CSV = "lp_news_links.csv"
-KEYWORDS = ["LP Radar"]  # 필요하면 ["LP Radar", "LP", "출자"] 이런 식으로 늘려도 됨
+KEYWORDS = ["LP Radar", "펀드 결성",
+    "조합 결성",
+    "펀드 결성 나선다",
+    "펀드레이징",
+    "1차 클로징",
+    "2차 클로징",
+    "멀티클로징"]  # 필요하면 ["LP Radar", "LP", "출자"] 이런 식으로 늘려도 됨
 
+def get_newstopkorea_fund_urls() -> List[str]:
+    """
+    뉴스톱코리아 VC/PE 섹션에서 펀드 관련 기사 URL 수집.
+    페이지 구조에 따라 selector는 나중에 조금 손봐줘야 할 수도 있음.
+    """
+    urls: Set[str] = set()
+
+    list_url = "https://www.newstopkorea.com/news/articleList.html?sc_section_code=S1N44&view_type=sm"
+    print(f"[INFO] 크롤링 중 - newstopkorea: {list_url}")
+
+    res = requests.get(list_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+    res.raise_for_status()
+    soup = BeautifulSoup(res.text, "html.parser")
+
+    # 기사 리스트 구조 예시:
+    # <li class="altlist-webzine-item">
+    #   <div class="altlist-webzine-content">
+    #     <h2 class="altlist-subject">
+    #       <a href="...articleView.html?idxno=...">제목...</a>
+    #     </h2>
+    #   </div>
+    # </li>
+    # → 제목 a 태그만 선택
+    for a in soup.select("div.altlist-webzine-content h2.altlist-subject a"):
+        text = (a.get_text() or "").strip()
+        if not text:
+            continue
+        if not any(kw in text for kw in KEYWORDS):
+            continue
+
+        href = a.get("href")
+        if not href:
+            continue
+
+        if href.startswith("/"):
+            full_url = "https://www.newstopkorea.com" + href
+        elif href.startswith("http"):
+            full_url = href
+        else:
+            full_url = "https://www.newstopkorea.com" + "/" + href.lstrip("./")
+
+        urls.add(full_url)
+
+    print(f"[INFO] newstopkorea에서 수집한 URL 개수: {len(urls)}")
+    return sorted(list(urls))
 
 def get_lp_radar_urls(max_pages: int = 3) -> List[str]:
     urls: Set[str] = set()
@@ -48,6 +99,14 @@ def get_lp_radar_urls(max_pages: int = 3) -> List[str]:
                 full_url = "https://www.thebell.co.kr/free/content/" + href.lstrip("./")
 
             urls.add(full_url)
+
+    # 2) newstopkorea 소스 추가
+    try:
+        nk_urls = get_newstopkorea_fund_urls()
+        for u in nk_urls:
+            urls.add(u)
+    except Exception as e:
+        print(f"[WARN] newstopkorea 크롤링 실패: {e}")
 
     # 정렬해서 반환 (안 해도 되지만 버그 디버깅할 때 눈에 보기 좋음)
     return sorted(list(urls))
@@ -102,7 +161,7 @@ def append_links_to_csv(new_urls: List[str], csv_path: str, start_deal_number: i
 
 
 if __name__ == "__main__":
-    print("=== thebell 'LP Radar' 링크 수집기 ===")
+    print("=== Fund news link collector (thebell + newstopkorea) ===")
 
     project_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(project_dir, LINKS_CSV)
@@ -115,7 +174,7 @@ if __name__ == "__main__":
     urls = get_lp_radar_urls(max_pages=3)
 
     if not urls:
-        print("[INFO] 'LP Radar' 기사 없음.")
+        print("[INFO] 수집할 펀드 관련 기사 없음.")
     else:
         # 3) 기존에 없는 URL만 추림
         new_urls = [u for u in urls if u not in existing_urls]
