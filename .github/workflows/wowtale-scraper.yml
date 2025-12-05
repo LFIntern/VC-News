@@ -42,6 +42,16 @@ jobs:
         run: |
           python sync_wowtale_to_notion.py
 
+      - name: Run LP News link scraper
+        run: |
+          python LP_News_Auto.py
+
+      - name: Run LP News GPT summarizer
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          python LP_News_GPT_Auto.py
+
       - name: Commit and push CSV if changed
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,7 +60,7 @@ jobs:
             echo "Changes detected. Committing..."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add wowtale_latest.csv wowtale_deals.csv
+            git add wowtale_latest.csv wowtale_deals.csv lp_news_links.csv lp_news_summaries.csv
             git commit -m "Update wowtale CSVs" || echo "Nothing to commit"
             git push || echo "Nothing to push"
           else
