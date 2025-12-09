@@ -33,7 +33,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          python wowale_GPT_auto.py
+          python wowtale_GPT_auto.py
 
       - name: Sync deals to Notion
         env:
@@ -67,7 +67,7 @@ jobs:
             echo "Changes detected. Committing..."
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add wowtale_latest.csv wowtale_deals.csv lp_news_links.csv lp_news_summaries.csv
+            git add wowtale_latest.csv wowtale_deals.csv lp_news_links.csv lp_news_summaries.csv lp_news_master_log.csv
             git commit -m "Update wowtale CSVs" || echo "Nothing to commit"
             git push || echo "Nothing to push"
           else

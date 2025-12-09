@@ -21,7 +21,7 @@ lp_news_summaries.csv → Notion 데이터베이스 동기화 스크립트
   코멘트,
   url
 
-⚙️ 환경 변수
+ 환경 변수
   - NOTION_TOKEN         : Notion 통합에서 발급받은 시크릿 토큰
   - NOTION_DATABASE_ID   : 동기화 대상 데이터베이스 ID
 """
