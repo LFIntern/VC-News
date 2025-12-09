@@ -55,7 +55,7 @@ jobs:
       - name: Sync LP News to Notion
         env:
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
-          NOTION_DATABASE_ID: ${{ secrets.NOTION_DATABASE_ID }}
+          NOTION_DATABASE_ID: ${{ secrets.NOTION_LP_NEWS_DB }}
         run: |
           python sync_lp_news_to_notion.py
 
