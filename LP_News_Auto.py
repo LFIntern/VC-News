@@ -7,6 +7,8 @@ from typing import List, Set
 
 BASE_URL = "https://www.thebell.co.kr/free/content/article.asp"
 LINKS_CSV = "lp_news_links.csv"
+SUMMARIES_CSV = "lp_news_summaries.csv"
+MASTER_CSV = "lp_news_master_log.csv"
 KEYWORDS = ["LP Radar", "펀드 결성",
     "조합 결성",
     "펀드 결성 나선다",
@@ -112,31 +114,40 @@ def get_lp_radar_urls(max_pages: int = 3) -> List[str]:
     return sorted(list(urls))
 
 
-def load_existing_urls_and_max_deal(csv_path: str):
+def load_existing_urls_and_max_deal(links_csv_path: str, summaries_csv_path: str, master_csv_path: str):
     """
-    기존 CSV에서 url 셋 + 최대 deal_number를 가져옴.
-    CSV 없으면 (빈 경우) → (set(), 0) 반환.
+    기존 링크 CSV + 요약 CSV + 마스터 로그 CSV에서
+    - url 셋 (이미 본 URL 전체)
+    - 최대 deal_number/Deal ID
+    를 가져옴.
+    CSV 없으면 해당 파일은 무시하고, 전체적으로 (set(), 0) 반환 가능.
     """
-    if not os.path.exists(csv_path):
-        return set(), 0
-
     existing_urls: Set[str] = set()
     max_deal = 0
 
-    with open(csv_path, newline="", encoding="utf-8-sig") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            url = row.get("url")
-            if url:
-                existing_urls.add(url)
-            dn = row.get("deal_number")
-            if dn:
-                try:
-                    n = int(dn)
-                    if n > max_deal:
-                        max_deal = n
-                except ValueError:
-                    continue
+    def update_from_csv(path: str):
+        nonlocal max_deal
+        if not os.path.exists(path):
+            return
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                url = row.get("url")
+                if url:
+                    existing_urls.add(url)
+                dn = row.get("Deal ID") or row.get("deal_number") or row.get("deal_id")
+                if dn:
+                    try:
+                        n = int(dn)
+                        if n > max_deal:
+                            max_deal = n
+                    except ValueError:
+                        continue
+
+    # 큐(링크), 요약, 마스터 로그 파일 순서로 모두 반영
+    update_from_csv(links_csv_path)
+    update_from_csv(summaries_csv_path)
+    update_from_csv(master_csv_path)
 
     return existing_urls, max_deal
 
@@ -160,14 +171,52 @@ def append_links_to_csv(new_urls: List[str], csv_path: str, start_deal_number: i
             deal_num += 1
 
 
+def load_processed_urls() -> set:
+    """
+    마스터 로그에서 이미 처리된 URL들을 읽어온다.
+    (펀드/비펀드 모두 포함)
+    """
+    urls = set()
+    if os.path.exists(MASTER_CSV):
+        with open(MASTER_CSV, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                url = row.get("url")
+                if url:
+                    urls.add(url)
+    return urls
+
+
+def append_master_log(rows: List[dict]):
+    fieldnames = [
+        "Deal ID",
+        "기사 제목",
+        "기사 작성일",
+        "url",
+        "is_fundraising",
+        "status",
+    ]
+    file_exists = os.path.exists(MASTER_CSV)
+    with open(MASTER_CSV, "a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+
+
 if __name__ == "__main__":
     print("=== Fund news link collector (thebell + newstopkorea) ===")
 
     project_dir = os.path.dirname(os.path.abspath(__file__))
-    csv_path = os.path.join(project_dir, LINKS_CSV)
+    links_csv_path = os.path.join(project_dir, LINKS_CSV)
+    summaries_csv_path = os.path.join(project_dir, SUMMARIES_CSV)
+    master_csv_path = os.path.join(project_dir, MASTER_CSV)
 
-    # 1) 기존 CSV에서 url 셋 + 최대 deal_number 읽기
-    existing_urls, max_deal = load_existing_urls_and_max_deal(csv_path)
+    # 1) 기존 URL/Deal ID 읽기: 큐 + 요약 + 마스터 로그 전체에서 가져옴
+    existing_urls, max_deal = load_existing_urls_and_max_deal(
+        links_csv_path, summaries_csv_path, master_csv_path
+    )
     print(f"[INFO] 기존 URL 개수: {len(existing_urls)}, 기존 최대 Deal Number: {max_deal}")
 
     # 2) 웹에서 최신 LP Radar 기사 URL 목록 가져오기
@@ -183,5 +232,5 @@ if __name__ == "__main__":
         if not new_urls:
             print("[INFO] 새로 추가할 링크 없음. CSV 수정 안 함.")
         else:
-            append_links_to_csv(new_urls, csv_path, start_deal_number=max_deal + 1)
-            print(f"[INFO] 총 {len(new_urls)}개 URL 추가 완료 → {csv_path}")
+            append_links_to_csv(new_urls, links_csv_path, start_deal_number=max_deal + 1)
+            print(f"[INFO] 총 {len(new_urls)}개 URL 추가 완료 → {links_csv_path}")
