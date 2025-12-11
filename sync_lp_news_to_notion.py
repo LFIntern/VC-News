@@ -266,28 +266,17 @@ def find_page_by_deal_id(deal_id: str):
     Deal ID가 같은 페이지가 Notion DB에 이미 있는지 조회.
     - Notion DB에서 'Deal ID' 프로퍼티는 rich_text 타입이어야 함.
     """
-    if not deal_id:
-        return None
-
-    url = f"{NOTION_API_BASE}/databases/{NOTION_DATABASE_ID}/query"
-    payload = {
-        "filter": {
-            "property": "Deal ID",
-            "rich_text": {
-                "equals": deal_id
-            },
-        },
-        "page_size": 1,
-    }
-
-    resp = requests.post(url, headers=notion_headers(), json=payload)
-    resp.raise_for_status()
-    data = resp.json()
-
-    results = data.get("results", [])
-    if not results:
-        return None
-    return results[0]  # 첫 번째 결과 반환
+try:
+    existing_page = find_page_by_deal_id(deal_id)
+except requests.exceptions.HTTPError as e:
+    status = e.response.status_code if e.response is not None else "N/A"
+    body_snippet = ""
+    if e.response is not None and e.response.text:
+        body_snippet = e.response.text[:300]
+    print(f"[ERROR] Notion query failed for Deal ID={deal_id} (status={status})")
+    if body_snippet:
+        print(f"[DEBUG] Response snippet: {body_snippet}")
+    continue
 
 
 def create_page_in_notion(row: dict):
