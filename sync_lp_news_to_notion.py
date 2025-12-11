@@ -22,12 +22,12 @@ lp_news_summaries.csv → Notion 데이터베이스 동기화 스크립트
   url
 
  환경 변수
-  - NOTION_TOKEN         : Notion 통합에서 발급받은 시크릿 토큰
-  - NOTION_DATABASE_ID   : 동기화 대상 데이터베이스 ID
+  - NOTION_API_KEY       : Notion 통합에서 발급받은 시크릿 토큰
+  - NOTION_LP_NEWS_DB    : 동기화 대상 데이터베이스 ID
 """
 
-NOTION_TOKEN = os.environ["NOTION_TOKEN"]
-NOTION_DATABASE_ID = os.environ["NOTION_DATABASE_ID"]
+NOTION_TOKEN = os.environ["NOTION_API_KEY"]
+NOTION_DATABASE_ID = os.environ["NOTION_LP_NEWS_DB"]
 
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
