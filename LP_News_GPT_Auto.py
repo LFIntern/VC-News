@@ -252,7 +252,7 @@ def append_master_log(rows: List[dict]):
             writer.writerow(r)
 
 
-def get_last_deal_id_from_summaries() -> int:
+def get_last_deal_id() -> int:
     """
     SUMMARIES_CSV 기준으로 마지막 Deal ID를 읽어와서 정수로 반환한다.
     파일이 없거나 유효한 Deal ID가 없으면 0을 반환한다.
@@ -285,7 +285,7 @@ if __name__ == "__main__":
     print(f"[INFO] 링크 CSV 로딩: {len(links)}건, 기존 처리 URL: {len(processed_urls)}건")
 
     # 써머리 CSV 기준 마지막 Deal ID를 불러와, 그 다음 번호부터 사용
-    last_deal_id = get_last_deal_id_from_summaries()
+    last_deal_id = get_last_deal_id()
     next_deal_id = last_deal_id + 1
     print(f"[INFO] 마지막 Deal ID(요약 기준): {last_deal_id}, 다음 시작 Deal ID: {next_deal_id}")
 
@@ -294,7 +294,6 @@ if __name__ == "__main__":
 
     for row in links:
         # Deal ID는 링크 CSV가 아니라, 써머리 CSV 기준 마지막 번호 + 1부터 순차 부여
-        deal_id = str(next_deal_id)
         url = row.get("url")
         if not url:
             continue
@@ -302,7 +301,7 @@ if __name__ == "__main__":
             continue
 
         try:
-            print(f"[INFO] 요약 중: deal {deal_id}, url={url}")
+            print(f"[INFO] 요약 중: url={url}")
             title, body = extract_article_text(url)
             data = call_openai(title=title, body=body)
 
@@ -317,6 +316,9 @@ if __name__ == "__main__":
             article_date = row.get("기사 작성일") or row.get("article_date") or row.get("date") or ""
 
             if is_fundraising:
+                deal_id = str(next_deal_id)
+                next_deal_id += 1
+
                 new_summary_rows.append(
                     {
                         "Deal ID": deal_id,
@@ -346,7 +348,7 @@ if __name__ == "__main__":
             else:
                 master_rows.append(
                     {
-                        "Deal ID": deal_id,
+                        "Deal ID": "",
                         "기사 제목": title,
                         "기사 작성일": article_date,
                         "url": url,
@@ -355,11 +357,8 @@ if __name__ == "__main__":
                     }
                 )
 
-            # 정상적으로 마스터 로그에 기록된 경우에만 다음 Deal ID로 증가
-            next_deal_id += 1
-
         except Exception as e:
-            print(f"[WARN] 요약 실패 (deal {deal_id}): {e}")
+            print(f"[WARN] 요약 실패 (url={url}): {e}")
 
     if not new_summary_rows:
         print("[INFO] 새로 요약할 URL 없음.")

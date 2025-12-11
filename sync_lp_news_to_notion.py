@@ -108,7 +108,12 @@ def build_properties_from_row(row: dict) -> dict:
       - 코멘트 (rich_text)
       - url (url)
     """
-    deal_id = safe_get(row, "Deal ID")
+    deal_id = (
+        safe_get(row, "Deal ID")
+        or safe_get(row, "\ufeffDeal ID")
+        or safe_get(row, "deal_number")
+        or safe_get(row, "deal_id")
+    )
     article_title = safe_get(row, "기사 제목") or "(제목 없음)"
     lp = safe_get(row, "LP")
     gp = safe_get(row, "운용사")
@@ -318,7 +323,7 @@ def sync_csv_to_notion(csv_path: str):
       - Deal ID가 이미 있는 페이지는 UPDATE
       - 없으면 새로 CREATE
     """
-    with open(csv_path, newline="", encoding="utf-8") as f:
+    with open(csv_path, newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         total = 0
         created = 0
@@ -326,7 +331,12 @@ def sync_csv_to_notion(csv_path: str):
 
         for row in reader:
             total += 1
-            deal_id = safe_get(row, "Deal ID")
+            deal_id = (
+                safe_get(row, "Deal ID")
+                or safe_get(row, "\ufeffDeal ID")
+                or safe_get(row, "deal_number")
+                or safe_get(row, "deal_id")
+            )
 
             if not deal_id:
                 print(f"[SKIP] Deal ID 없음 (row {total})")
