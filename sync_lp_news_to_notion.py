@@ -26,7 +26,7 @@ lp_news_summaries.csv → Notion 데이터베이스 동기화 스크립트
   - NOTION_LP_NEWS_DB    : 동기화 대상 데이터베이스 ID
 """
 
-NOTION_TOKEN = os.environ["NOTION_API_KEY"]
+NOTION_TOKEN = os.environ.get("NOTION_API_KEY") or os.environ["NOTION_TOKEN"]
 NOTION_DATABASE_ID = os.environ["NOTION_LP_NEWS_DB"]
 
 NOTION_API_BASE = "https://api.notion.com/v1"
