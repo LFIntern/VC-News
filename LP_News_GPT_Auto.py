@@ -252,6 +252,31 @@ def append_master_log(rows: List[dict]):
             writer.writerow(r)
 
 
+def get_last_deal_id_from_summaries() -> int:
+    """
+    SUMMARIES_CSV 기준으로 마지막 Deal ID를 읽어와서 정수로 반환한다.
+    파일이 없거나 유효한 Deal ID가 없으면 0을 반환한다.
+    """
+    if not os.path.exists(SUMMARIES_CSV):
+        return 0
+
+    last_id = 0
+    with open(SUMMARIES_CSV, newline="", encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            raw = row.get("Deal ID") or row.get("deal_number") or row.get("deal_id")
+            if not raw:
+                continue
+            try:
+                num = int(str(raw).strip())
+            except ValueError:
+                # 숫자로 변환 불가한 Deal ID는 무시
+                continue
+            if num > last_id:
+                last_id = num
+    return last_id
+
+
 if __name__ == "__main__":
     print("=== LP News GPT 요약기 ===")
 
@@ -259,11 +284,17 @@ if __name__ == "__main__":
     processed_urls = load_processed_urls()
     print(f"[INFO] 링크 CSV 로딩: {len(links)}건, 기존 처리 URL: {len(processed_urls)}건")
 
+    # 써머리 CSV 기준 마지막 Deal ID를 불러와, 그 다음 번호부터 사용
+    last_deal_id = get_last_deal_id_from_summaries()
+    next_deal_id = last_deal_id + 1
+    print(f"[INFO] 마지막 Deal ID(요약 기준): {last_deal_id}, 다음 시작 Deal ID: {next_deal_id}")
+
     new_summary_rows: List[dict] = []  # 새로 요약할 펀드레이징 기사
     master_rows: List[dict] = []       # 마스터 로그용 처리 이력
 
     for row in links:
-        deal_id = row.get("Deal ID") or row.get("deal_number") or row.get("deal_id")
+        # Deal ID는 링크 CSV가 아니라, 써머리 CSV 기준 마지막 번호 + 1부터 순차 부여
+        deal_id = str(next_deal_id)
         url = row.get("url")
         if not url:
             continue
@@ -323,6 +354,9 @@ if __name__ == "__main__":
                         "status": "non_fundraising",
                     }
                 )
+
+            # 정상적으로 마스터 로그에 기록된 경우에만 다음 Deal ID로 증가
+            next_deal_id += 1
 
         except Exception as e:
             print(f"[WARN] 요약 실패 (deal {deal_id}): {e}")
