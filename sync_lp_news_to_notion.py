@@ -128,8 +128,8 @@ def build_properties_from_row(row: dict) -> dict:
 
     properties: dict = {}
 
-    # 1) 제목: 기사 제목 (title 타입)
-    properties["기사 제목"] = {
+    # 1) 제목: Name (Notion 기본 title 컬럼) + 기사 제목은 별도 rich_text로 저장
+    properties["Name"] = {
         "title": [
             {
                 "type": "text",
@@ -266,17 +266,28 @@ def find_page_by_deal_id(deal_id: str):
     Deal ID가 같은 페이지가 Notion DB에 이미 있는지 조회.
     - Notion DB에서 'Deal ID' 프로퍼티는 rich_text 타입이어야 함.
     """
-try:
-    existing_page = find_page_by_deal_id(deal_id)
-except requests.exceptions.HTTPError as e:
-    status = e.response.status_code if e.response is not None else "N/A"
-    body_snippet = ""
-    if e.response is not None and e.response.text:
-        body_snippet = e.response.text[:300]
-    print(f"[ERROR] Notion query failed for Deal ID={deal_id} (status={status})")
-    if body_snippet:
-        print(f"[DEBUG] Response snippet: {body_snippet}")
-    continue
+    if not deal_id:
+        return None
+
+    url = f"{NOTION_API_BASE}/databases/{NOTION_DATABASE_ID}/query"
+    payload = {
+        "filter": {
+            "property": "Deal ID",
+            "rich_text": {
+                "equals": deal_id
+            },
+        },
+        "page_size": 1,
+    }
+
+    resp = requests.post(url, headers=notion_headers(), json=payload)
+    resp.raise_for_status()
+    data = resp.json()
+
+    results = data.get("results", [])
+    if not results:
+        return None
+    return results[0]  # 첫 번째 결과 반환
 
 
 def create_page_in_notion(row: dict):
@@ -332,7 +343,18 @@ def sync_csv_to_notion(csv_path: str):
                 continue
 
             # Notion에서 기존 페이지 존재 여부 확인
-            existing_page = find_page_by_deal_id(deal_id)
+            try:
+                existing_page = find_page_by_deal_id(deal_id)
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else "N/A"
+                body_snippet = ""
+                if e.response is not None and e.response.text:
+                    body_snippet = e.response.text[:300]
+                print(f"[ERROR] Notion query failed for Deal ID={deal_id} (status={status})")
+                if body_snippet:
+                    print(f"[DEBUG] Response snippet: {body_snippet}")
+                # 이 행은 건너뛰고 다음 row로 진행
+                continue
 
             if existing_page:
                 page_id = existing_page["id"]
