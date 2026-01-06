@@ -2,6 +2,8 @@ import os
 import csv
 import json
 from typing import List, Dict, Any
+import hashlib
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -89,6 +91,71 @@ USER_PROMPT_TEMPLATE = """
 """
 
 
+# -----------------------------
+# URL de-duplication helpers
+# -----------------------------
+
+def normalize_url(u: str) -> str:
+    """Normalize URLs so the same article isn't re-processed due to minor URL variations.
+
+    - Force https
+    - Remove leading www.
+    - Remove trailing slash
+    - Drop common tracking params
+    - Sort query params
+    """
+    if not u:
+        return ""
+
+    u = u.strip()
+    p = urlparse(u)
+
+    scheme = "https"
+    netloc = (p.netloc or "").lower()
+    if netloc.startswith("www."):
+        netloc = netloc[4:]
+
+    path = (p.path or "").rstrip("/")
+
+    q = parse_qs(p.query or "")
+    drop_keys = {
+        "utm_source",
+        "utm_medium",
+        "utm_campaign",
+        "utm_term",
+        "utm_content",
+        "fbclid",
+        "gclid",
+    }
+    q = {k: v for k, v in q.items() if k not in drop_keys}
+
+    # sort query params for stable equality
+    query = urlencode([(k, q[k][0]) for k in sorted(q.keys())], doseq=False)
+
+    return urlunparse((scheme, netloc, path, "", query, ""))
+
+
+def make_source_id(u: str) -> str:
+    """Create a stable per-article id used for upsert/de-dup.
+
+    Prefer domain-specific IDs when available (e.g., thebell 'key='), otherwise hash the normalized URL.
+    """
+    nu = normalize_url(u)
+    if not nu:
+        return ""
+
+    p = urlparse(nu)
+
+    # thebell: use key= query param if present
+    if "thebell.co.kr" in (p.netloc or ""):
+        q = parse_qs(p.query or "")
+        if "key" in q and q["key"]:
+            return f"thebell:{q['key'][0]}"
+
+    # fallback: normalized URL hash
+    return "urlhash:" + hashlib.sha1(nu.encode("utf-8")).hexdigest()
+
+
 def load_links() -> List[dict]:
     if not os.path.exists(LINKS_CSV):
         return []
@@ -109,7 +176,7 @@ def load_processed_urls() -> set:
             for row in reader:
                 url = row.get("url")
                 if url:
-                    urls.add(url)
+                    urls.add(normalize_url(url))
     # 과거 버전 호환: 마스터 로그가 없던 시절 요약만 된 URL들도 포함
     if os.path.exists(SUMMARIES_CSV):
         with open(SUMMARIES_CSV, newline="", encoding="utf-8-sig") as f:
@@ -117,7 +184,7 @@ def load_processed_urls() -> set:
             for row in reader:
                 url = row.get("url")
                 if url:
-                    urls.add(url)
+                    urls.add(normalize_url(url))
     return urls
 
 
@@ -224,6 +291,8 @@ def append_summaries(rows: List[dict]):
         "조성상태",
         "요약",
         "url",
+        "Source ID",
+        "raw_url",
     ]
     file_exists = os.path.exists(SUMMARIES_CSV)
     with open(SUMMARIES_CSV, "a", newline="", encoding="utf-8-sig") as f:
@@ -242,6 +311,8 @@ def append_master_log(rows: List[dict]):
         "url",
         "is_fundraising",
         "status",
+        "Source ID",
+        "raw_url",
     ]
     file_exists = os.path.exists(MASTER_CSV)
     with open(MASTER_CSV, "a", newline="", encoding="utf-8-sig") as f:
@@ -293,15 +364,21 @@ if __name__ == "__main__":
     master_rows: List[dict] = []       # 마스터 로그용 처리 이력
 
     for row in links:
-        # Deal ID는 링크 CSV가 아니라, 써머리 CSV 기준 마지막 번호 + 1부터 순차 부여
-        url = row.get("url")
+        raw_url = row.get("url")
+        if not raw_url:
+            continue
+
+        url = normalize_url(raw_url)
         if not url:
             continue
+
+        source_id = make_source_id(url)
+
         if url in processed_urls:
             continue
 
         try:
-            print(f"[INFO] 요약 중: url={url}")
+            print(f"[INFO] 요약 중: url={url} (raw={raw_url})")
             title, body = extract_article_text(url)
             data = call_openai(title=title, body=body)
 
@@ -333,6 +410,8 @@ if __name__ == "__main__":
                         "조성상태": data.get("조성상태"),
                         "요약": data.get("요약"),
                         "url": url,
+                        "Source ID": source_id,
+                        "raw_url": raw_url,
                     }
                 )
                 master_rows.append(
@@ -343,6 +422,8 @@ if __name__ == "__main__":
                         "url": url,
                         "is_fundraising": True,
                         "status": "fundraising_saved",
+                        "Source ID": source_id,
+                        "raw_url": raw_url,
                     }
                 )
             else:
@@ -354,6 +435,8 @@ if __name__ == "__main__":
                         "url": url,
                         "is_fundraising": False,
                         "status": "non_fundraising",
+                        "Source ID": source_id,
+                        "raw_url": raw_url,
                     }
                 )
 

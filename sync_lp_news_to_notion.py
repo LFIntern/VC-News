@@ -21,6 +21,9 @@ lp_news_summaries.csv → Notion 데이터베이스 동기화 스크립트
   코멘트,
   url
 
+  - Source ID (optional)
+  - raw_url (optional)
+
  환경 변수
   - NOTION_API_KEY       : Notion 통합에서 발급받은 시크릿 토큰
   - NOTION_LP_NEWS_DB    : 동기화 대상 데이터베이스 ID
@@ -28,6 +31,10 @@ lp_news_summaries.csv → Notion 데이터베이스 동기화 스크립트
 
 NOTION_TOKEN = os.environ.get("NOTION_API_KEY") or os.environ["NOTION_TOKEN"]
 NOTION_DATABASE_ID = os.environ["NOTION_LP_NEWS_DB"]
+
+# Optional duplicate cleanup
+ARCHIVE_DUPLICATES = (os.environ.get("NOTION_ARCHIVE_DUPLICATES", "").strip().lower() in {"1", "true", "yes", "y"})
+DRY_RUN = (os.environ.get("NOTION_DRY_RUN", "").strip().lower() in {"1", "true", "yes", "y"})
 
 NOTION_API_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
@@ -107,6 +114,7 @@ def build_properties_from_row(row: dict) -> dict:
       - 요약 (rich_text)
       - 코멘트 (rich_text)
       - url (url)
+      - Source ID (rich_text) (optional but recommended)
     """
     deal_id = (
         safe_get(row, "Deal ID")
@@ -125,6 +133,7 @@ def build_properties_from_row(row: dict) -> dict:
     summary = safe_get(row, "요약")
     comment = safe_get(row, "코멘트")
     url = safe_get(row, "url")
+    source_id = safe_get(row, "Source ID")
 
     properties: dict = {}
 
@@ -248,6 +257,17 @@ def build_properties_from_row(row: dict) -> dict:
             ]
         }
 
+    # 12) Source ID (rich_text) - stable upsert key
+    if source_id:
+        properties["Source ID"] = {
+            "rich_text": [
+                {
+                    "type": "text",
+                    "text": {"content": source_id},
+                }
+            ]
+        }
+
     # 13) url (url 타입)
     if url:
         properties["url"] = {
@@ -290,6 +310,59 @@ def find_page_by_deal_id(deal_id: str):
     return results[0]  # 첫 번째 결과 반환
 
 
+def list_pages_by_url(url_value: str):
+    """Return all pages in the DB whose `url` property equals url_value.
+
+    Notion DB must have a `url` property of type url.
+    """
+    if not url_value:
+        return []
+
+    query_url = f"{NOTION_API_BASE}/databases/{NOTION_DATABASE_ID}/query"
+    payload = {
+        "filter": {
+            "property": "url",
+            "url": {"equals": url_value},
+        },
+        "page_size": 100,
+    }
+
+    results = []
+    next_cursor = None
+    while True:
+        if next_cursor:
+            payload["start_cursor"] = next_cursor
+        elif "start_cursor" in payload:
+            payload.pop("start_cursor", None)
+
+        resp = requests.post(query_url, headers=notion_headers(), json=payload)
+        resp.raise_for_status()
+        data = resp.json()
+
+        batch = data.get("results", [])
+        if batch:
+            results.extend(batch)
+
+        if not data.get("has_more"):
+            break
+        next_cursor = data.get("next_cursor")
+        if not next_cursor:
+            break
+
+    return results
+
+
+def find_page_by_url(url_value: str):
+    """Backward-compatible helper.
+
+    Returns (first_page_or_None, count).
+    """
+    pages = list_pages_by_url(url_value)
+    if not pages:
+        return None, 0
+    return pages[0], len(pages)
+
+
 def create_page_in_notion(row: dict):
     properties = build_properties_from_row(row)
     payload = {
@@ -311,6 +384,42 @@ def update_page_in_notion(page_id: str, row: dict):
     resp = requests.patch(url, headers=notion_headers(), json=payload)
     resp.raise_for_status()
     return resp.json()
+
+
+def archive_page_in_notion(page_id: str):
+    """Archive a Notion page (soft-delete) by setting archived=true."""
+    if not page_id:
+        return None
+
+    if DRY_RUN:
+        print(f"[DRY_RUN][ARCHIVE] page_id={page_id}")
+        return None
+
+    url = f"{NOTION_API_BASE}/pages/{page_id}"
+    payload = {"archived": True}
+    resp = requests.patch(url, headers=notion_headers(), json=payload)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def archive_duplicate_pages_by_url(url_value: str, keep_page_id: str):
+    """If multiple pages share the same url, archive all except keep_page_id."""
+    if not ARCHIVE_DUPLICATES:
+        return 0
+
+    pages = list_pages_by_url(url_value)
+    if len(pages) <= 1:
+        return 0
+
+    archived = 0
+    for p in pages:
+        pid = p.get("id")
+        if not pid or pid == keep_page_id:
+            continue
+        archive_page_in_notion(pid)
+        archived += 1
+
+    return archived
 
 
 # ------------------------
@@ -337,32 +446,59 @@ def sync_csv_to_notion(csv_path: str):
                 or safe_get(row, "deal_number")
                 or safe_get(row, "deal_id")
             )
+            url_value = safe_get(row, "url")
 
-            if not deal_id:
-                print(f"[SKIP] Deal ID 없음 (row {total})")
+            if not url_value and not deal_id:
+                print(f"[SKIP] url/Deal ID 모두 없음 (row {total})")
                 continue
 
-            # Notion에서 기존 페이지 존재 여부 확인
-            try:
-                existing_page = find_page_by_deal_id(deal_id)
-            except requests.exceptions.HTTPError as e:
-                status = e.response.status_code if e.response is not None else "N/A"
-                body_snippet = ""
-                if e.response is not None and e.response.text:
-                    body_snippet = e.response.text[:300]
-                print(f"[ERROR] Notion query failed for Deal ID={deal_id} (status={status})")
-                if body_snippet:
-                    print(f"[DEBUG] Response snippet: {body_snippet}")
-                # 이 행은 건너뛰고 다음 row로 진행
-                continue
+            existing_page = None
+            dup_count = 0
+
+            # 1) URL 기준 업서트(중복 방지 최우선)
+            if url_value:
+                try:
+                    existing_page, dup_count = find_page_by_url(url_value)
+                    if dup_count > 1:
+                        print(f"[WARN] 동일 url 페이지가 {dup_count}개 존재: url={url_value} (첫 번째만 업데이트)")
+                        if ARCHIVE_DUPLICATES and existing_page is not None:
+                            kept_id = existing_page.get("id")
+                            archived_n = archive_duplicate_pages_by_url(url_value, keep_page_id=kept_id)
+                            if archived_n:
+                                print(f"[CLEANUP] url={url_value} 중복 {archived_n}개 archived (keep={kept_id})")
+                except requests.exceptions.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else "N/A"
+                    body_snippet = ""
+                    if e.response is not None and e.response.text:
+                        body_snippet = e.response.text[:300]
+                    print(f"[ERROR] Notion query failed for url={url_value} (status={status})")
+                    if body_snippet:
+                        print(f"[DEBUG] Response snippet: {body_snippet}")
+                    continue
+
+            # 2) URL로 못 찾으면 Deal ID로 fallback
+            if existing_page is None and deal_id:
+                try:
+                    existing_page = find_page_by_deal_id(deal_id)
+                except requests.exceptions.HTTPError as e:
+                    status = e.response.status_code if e.response is not None else "N/A"
+                    body_snippet = ""
+                    if e.response is not None and e.response.text:
+                        body_snippet = e.response.text[:300]
+                    print(f"[ERROR] Notion query failed for Deal ID={deal_id} (status={status})")
+                    if body_snippet:
+                        print(f"[DEBUG] Response snippet: {body_snippet}")
+                    continue
 
             if existing_page:
                 page_id = existing_page["id"]
-                print(f"[UPDATE] Deal ID={deal_id} (page_id={page_id})")
+                key_msg = f"url={url_value}" if url_value else f"Deal ID={deal_id}"
+                print(f"[UPDATE] {key_msg} (page_id={page_id})")
                 update_page_in_notion(page_id, row)
                 updated += 1
             else:
-                print(f"[CREATE] Deal ID={deal_id}")
+                key_msg = f"url={url_value}" if url_value else f"Deal ID={deal_id}"
+                print(f"[CREATE] {key_msg}")
                 create_page_in_notion(row)
                 created += 1
 
@@ -378,5 +514,7 @@ if __name__ == "__main__":
 
     print(f"CSV → Notion 동기화 시작: {CSV_PATH}")
     print(f"Database ID: {NOTION_DATABASE_ID}")
+    print(f"Archive duplicates enabled: {ARCHIVE_DUPLICATES} (set NOTION_ARCHIVE_DUPLICATES=true)")
+    print(f"Dry-run mode: {DRY_RUN} (set NOTION_DRY_RUN=true)")
     sync_csv_to_notion(CSV_PATH)
     print("동기화 완료.")
